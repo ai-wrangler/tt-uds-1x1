@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v
+PROJECT_SOURCES = project.v uds_spi.v uds_core.v
 
 ifneq ($(GATES),yes)
 
@@ -30,6 +30,10 @@ VERILOG_SOURCES += $(PDK_ROOT)/sky130A/libs.ref/sky130_fd_sc_hd/verilog/sky130_f
 VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 
 endif
+
+# Clocks per frame for the testbench: 48 x VOICES, read from src/project.v
+VOICES := $(shell sed -n "s/.*localparam \[3:0\] VOICES = 4'd\([0-9]*\);.*/\1/p" $(SRC_DIR)/project.v)
+COMPILE_ARGS += -Ptb.FRAME=$(shell expr 48 \* $(VOICES))
 
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)

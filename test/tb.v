@@ -1,17 +1,21 @@
 `default_nettype none
 `timescale 1ns / 1ps
 
-/* This testbench just instantiates the module and makes some convenient wires
-   that can be driven / tested by the cocotb test.py.
+/* Testbench for UDS-1x1. Besides the usual wiring it counts the 1s on the
+   audio pin in every frame, so the cocotb test can compare each frame with
+   the Python model (model/uds_model.py) without sampling every clock.
 */
 module tb ();
 
   // Dump the signals to a FST file. You can view it with gtkwave or surfer.
   initial begin
     $dumpfile("tb.fst");
-    $dumpvars(0, tb);
+    $dumpvars(1, tb);
     #1;
   end
+
+  // Clocks per frame = 48 x voices. Must match VOICES in src/project.v.
+  parameter FRAME = 192;
 
   // Wire up the inputs and outputs:
   reg clk;
@@ -27,8 +31,7 @@ module tb ();
   wire VGND = 1'b0;
 `endif
 
-  // Replace tt_um_example with your module name:
-  tt_um_example user_project (
+  tt_um_ai_wrangler_uds1x1 user_project (
 
       // Include power ports for the Gate Level test:
 `ifdef GL_TEST
@@ -45,5 +48,35 @@ module tb ();
       .clk    (clk),      // clock
       .rst_n  (rst_n)     // not reset
   );
+
+  // cyc = clock within the run; frame clock 0 is the cycle that ends with the
+  // first rising edge after reset, the same as the chip's own counters.
+  // The audio pin in cycle c carries the sigma-delta carry of cycle c - 1, so
+  // frame k is the samples taken at the ends of cycles k*FRAME+1 .. (k+1)*FRAME.
+  reg [31:0] cyc;
+  reg [15:0] ones_acc;
+  reg [15:0] frame_ones;    // 1s in the last complete frame
+  reg [31:0] frame_count;   // complete frames since reset
+  reg        frame_tick;    // toggles when a frame completes
+
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      cyc         <= 32'd0;
+      ones_acc    <= 16'd0;
+      frame_ones  <= 16'd0;
+      frame_count <= 32'd0;
+      frame_tick  <= 1'b0;
+    end else begin
+      cyc <= cyc + 32'd1;
+      if (cyc != 32'd0 && cyc % FRAME == 0) begin
+        frame_ones  <= ones_acc + {15'd0, uo_out[7]};
+        ones_acc    <= 16'd0;
+        frame_count <= frame_count + 32'd1;
+        frame_tick  <= ~frame_tick;
+      end else if (cyc != 32'd0) begin
+        ones_acc <= ones_acc + {15'd0, uo_out[7]};
+      end
+    end
+  end
 
 endmodule
