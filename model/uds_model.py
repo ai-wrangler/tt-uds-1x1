@@ -41,9 +41,10 @@ Noise: channels 0-4 (snare, toms, bass drum) use low-passed LFSR noise,
 channels 5-7 (cymbal, hi-hats) use the metal source: four square waves XORed.
 
 Voice word, in the order the bits leave the ring (bit 0 first)
-    0-7 pitch, 8-11 decay, 12-15 sweep, 16-19 balance  (MSB first, as sent)
-    20-27 env, 28-43 phase, 44-46 channel               (LSB first)
-    47 unused
+    0-7 pitch, 8-11 decay, 12-15 sweep  (MSB first, as sent)
+    16-23 env                           (LSB first)
+    24-27 balance                       (MSB first, as sent)
+    28-30 channel, 31 unused, 32-47 phase  (LSB first)
 
 Per frame (each step() call)
     1. At the frame boundary: a pending HIT picks its voice slot from the

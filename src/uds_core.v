@@ -7,8 +7,11 @@
  * are updated bit-serially and written back into the start of the ring.
  *
  * Word layout, in the order the bits leave the ring:
- *   0-7 pitch, 8-11 decay, 12-15 sweep, 16-19 balance   (MSB first)
- *   20-27 env, 28-43 phase, 44-46 channel                 (LSB first)
+ *   0-7 pitch, 8-11 decay, 12-15 sweep  (MSB first, as sent)
+ *   16-23 env                           (LSB first)
+ *   24-27 balance                       (MSB first, as sent)
+ *   28-30 channel, 31 unused            (LSB first)
+ *   32-47 phase                         (LSB first)
  *
  * Sound: no multiplier. On the last clock of window v-1 the engine reads
  * voice v's triangle, envelope and balance from the ring. During window v it
@@ -92,10 +95,10 @@ module uds_core #(
 
   wire [7:0] n_pitch = {nw[0], nw[1], nw[2], nw[3], nw[4], nw[5], nw[6], nw[7]};
   wire [3:0] n_sweep = {nw[12], nw[13], nw[14], nw[15]};
-  wire [3:0] n_bal   = {nw[16], nw[17], nw[18], nw[19]};
-  wire [7:0] n_env   = nw[27:20];
-  wire [9:0] n_ph    = nw[43:34];                    // phase[15:6]
-  wire [2:0] n_ch    = nw[46:44];
+  wire [3:0] n_bal   = {nw[24], nw[25], nw[26], nw[27]};
+  wire [7:0] n_env   = nw[23:16];
+  wire [9:0] n_ph    = nw[47:38];                    // phase[15:6]
+  wire [2:0] n_ch    = nw[30:28];
 
   // effective pitch: pitch + sweep offset, at most 255 (sweep bit 3 is reserved)
   wire [6:0] up     = n_env[7] ? n_env[6:0] : 7'd0;
@@ -131,10 +134,10 @@ module uds_core #(
   end
 
   // ------------------------------------------------- bit-serial env and phase
-  wire       in_env   = t >= 6'd20 && t <= 6'd27;
-  wire       in_phase = t >= 6'd28 && t <= 6'd43;
-  wire [2:0] ej       = t[2:0] - 3'd4;              // t - 20
-  wire [3:0] pj       = t[3:0] - 4'd12;             // t - 28
+  wire       in_env   = t[5:3] == 3'b010;            // 16..23
+  wire       in_phase = t[5:4] == 2'b10;             // 32..47
+  wire [2:0] ej       = t[2:0];                      // env bit
+  wire [3:0] pj       = t[3:0];                      // phase bit
 
   // env -= max(env >> 3, 1); bit j of env >> 3 is 3 bits ahead in the ring
   reg        bor;
@@ -165,16 +168,18 @@ module uds_core #(
   wire         committing = commit && v == tgt;
   reg          tail_commit;
 
-  assign commit_shift = committing && t < 6'd20;
+  assign commit_shift = committing && (t[5:4] == 2'b00 || t[5:2] == 4'b0110);  // 0..15, 24..27
   assign busy         = pend | commit;
   assign frame_sync   = v == {VW{1'b0}};
 
   always @(*) begin
-    if (t < 6'd20)      tail_commit = payload_msb;          // pitch, decay, sweep, balance
-    else if (t < 6'd28) tail_commit = level[ej[1:0]];       // env = 17 x level
-    else if (t < 6'd44) tail_commit = t == 6'd42;           // phase = 0x4000
-    else if (t < 6'd47) tail_commit = hit_ch[t[1:0]];       // channel
-    else                tail_commit = 1'b0;
+    case (t[5:3])
+      3'd0, 3'd1: tail_commit = payload_msb;                  // pitch, decay, sweep
+      3'd2:       tail_commit = level[ej[1:0]];               // env = 17 x level
+      3'd3:       tail_commit = t[2] ? (!(&t[1:0]) && hit_ch[t[1:0]])  // channel, unused
+                                     : payload_msb;           // balance
+      default:    tail_commit = t[3:0] == 4'd14;              // phase = 0x4000
+    endcase
   end
 
   always @(*) begin
@@ -197,10 +202,10 @@ module uds_core #(
       wire [7:0] e;
       wire [2:0] c;
       for (gk = 0; gk < 8; gk = gk + 1) begin : g_env
-        assign e[gk] = ring[NL-2-gu*L-20-gk];
+        assign e[gk] = ring[NL-2-gu*L-16-gk];
       end
       for (gk = 0; gk < 3; gk = gk + 1) begin : g_ch
-        assign c[gk] = ring[NL-2-gu*L-44-gk];
+        assign c[gk] = ring[NL-2-gu*L-28-gk];
       end
       assign act[gu]            = |e;
       assign same[gu]           = act[gu] && ((c == 3'd7) ? 3'd6 : c) == hgrp;

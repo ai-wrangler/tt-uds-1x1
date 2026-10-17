@@ -31,7 +31,7 @@ module uds_spi #(
     output wire        stop,          // one-clock pulse: STOP
     output reg  [2:0]  ch,            // channel of the HIT (or of the pin trigger)
     output wire        payload_msb,   // sr[23]
-    output wire [3:0]  level,         // sr[23:20]: the level nibble after 20 shifts
+    output wire [3:0]  level,         // sr[19:16]: the level nibble after 16 shifts
 
     input  wire        commit_shift,  // voice engine: shift the payload out
     input  wire        preset_load,   // voice engine: load a pin trigger preset
@@ -68,7 +68,7 @@ module uds_spi #(
   assign idle        = cs_s[1];
   assign miso        = active & sr[7];
   assign payload_msb = sr[23];
-  assign level       = sr[23:20];
+  assign level       = sr[19:16];
 
   always @(posedge clk) begin
     mosi_s   <= mosi_pin;

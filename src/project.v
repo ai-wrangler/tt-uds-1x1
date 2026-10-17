@@ -25,7 +25,7 @@ module tt_um_ai_wrangler_uds1x1 (
 );
 
   // Build options. 1x1 tile: 3 voices, no pin triggers, no STATUS.
-  localparam [3:0] VOICES   = 4'd3;
+  localparam [3:0] VOICES   = 4'd2;
   localparam       TRIGGERS = 0;
   localparam       STATUS   = 0;
 
