@@ -40,6 +40,7 @@ jobs:
   viewer:
     needs: gds
     runs-on: ubuntu-24.04
+    environment: github-pages   # GitHub's Pages deploy refuses jobs without one ("Missing environment")
     permissions:
       pages: write      # to deploy to Pages
       id-token: write   # to verify the deployment originates from an appropriate source
