@@ -69,24 +69,27 @@ Per frame (each step() call)
        clock. step() returns the frame's count of 1s.
 
 Sigma-delta DAC (v0.2, VERSION register 0x22)
-    A 1-bit second-order loop, noise transfer function (1 - z^-1)^2, with
-    the input at half scale (feedback +-4096 for an x of at most +-2048):
-        y   = 1 if v2 >= 0 else 0            (the bit on the pin next clock)
+    A 1-bit second-order loop with two delaying integrators (feedback 1 and
+    2), noise transfer function exactly (1 - z^-1)^2, input at half scale
+    (feedback +-4096 for an x of at most +-2048):
+        y   = 1 if v2 >= 0 else 0               the pin, one clock later
         fb  = +4096 if y else -4096
-        v1 <- clamp(v1 + x - fb, -16384, 16383)  15 bits, saturating
-        v2 <- v2 + v1 - fb                        17 bits, never overflows
+        v1 <- clamp(v1 + x - fb, -16384, 16383)   15 bits, saturating
+        v2 <- v2 + v1 - 2 fb   (the old v1)       17 bits, never overflows
+    Both integrators update from registered values, so the two adders work
+    side by side (no adder chain in the clock period).
     Reset: v1 = 0, v2 = -1 (the pin is low in reset and idles as 0110 0110 ...).
     Silence: when no voice sounds at the end of a frame (the next frame's x
     is all 0), the frame's last clock (whose x is always 0) loads the reset
     values instead of updating, so every silence is the same clean pattern
     with exactly 48 ones per frame, whatever the loop held after a decay.
     Boundedness, for ANY input with |x| <= 2048 (proof in sd2_bounds()):
-    while v2 >= 0 the feedback lowers v1 by at least 2048 per clock, and v2
-    only rises while v1 > 4096, so after v2 turns non-negative it rises for
-    at most 5 more clocks; hence |v2| <= 51200 < 2^16. The v1 clamp is a
-    safety net: the chip's own signals keep |v1| below about 2.7 x 4096
-    (see docs/sd2), and the tests check that it never acts.
-    The first-order DAC of v0.1 (DAC_ORDER = 1) is kept for comparisons:
+    while v2 >= 0 every clock lowers v1 by at least 2048, and v2 only rises
+    while v1 > 8192, so once v2 turns non-negative it rises for at most 4
+    more clocks; hence -45056 <= v2 <= 45050, inside 17 bits. The v1 clamp
+    is a safety net: the chip's own signals keep |v1| below about 3.3 x 4096
+    (model/dac_analysis.py), and the tests check that it never acts.
+    The first-order DAC of v0.1 (Engine(dac_order=1)) is kept for comparisons:
         acc <- acc + 2048 + x (12 bits), the bit is the carry.
 """
 
@@ -216,25 +219,25 @@ def window_x(env, balance, tri, noise):
 
 
 def sd2_bounds(xmax=2048, fb=SD_FB, v1_min=SD_V1_MIN, v1_max=SD_V1_MAX):
-    """Worst-case |v2| of the second-order loop for any input |x| <= xmax.
+    """Worst-case v2 of the second-order loop for ANY input |x| <= xmax.
 
-    While v2 >= 0 (y = 1) every clock lowers v1 by at least fb - xmax, and v2
-    changes by v1' - fb, so it rises only while v1' > fb. v2 turns
-    non-negative from v2 <= -1 in one step of at most v1_max + fb. From there
-    it can rise by the sum of the positive v1' - fb, with v1' falling from
-    v1_max by fb - xmax per clock. The negative side is the mirror image
-    (x >= -xmax, v1 >= v1_min). Returns (lowest, highest) v2."""
+    While v2 >= 0 (y = 1) each clock changes v2 by v1 - 2 fb (the v1 before
+    the clock) and lowers v1 by at least d = fb - xmax (or v1 is at the
+    clamp's low end). v2 turns non-negative from v2 <= -1 in one clock that
+    adds at most v1_max + 2 fb; after that the v1 it adds are at most v1_max,
+    v1_max - d, v1_max - 2d, ..., so it rises only while those exceed 2 fb.
+    The negative side is the mirror image. Returns (lowest, highest) v2."""
     d = fb - xmax
     assert d > 0
-    hi = -1 + v1_max + fb
-    v1 = v1_max - d
-    while v1 > fb:
-        hi += v1 - fb
+    hi = -1 + v1_max + 2 * fb
+    v1 = v1_max
+    while v1 > 2 * fb:
+        hi += v1 - 2 * fb
         v1 -= d
-    lo = 0 + v1_min - fb
-    v1 = v1_min + d
-    while v1 < -fb:
-        lo += v1 + fb
+    lo = 0 + v1_min - 2 * fb
+    v1 = v1_min
+    while v1 < -2 * fb:
+        lo += v1 + 2 * fb
         v1 += d
     return lo, hi
 
@@ -416,6 +419,7 @@ class Engine:
                     bits.append(0)
                 break
             fb = SD_FB if v2 >= 0 else -SD_FB
+            v2 += v1 - 2 * fb               # both from this clock's v1, v2
             v1 += x - fb
             if v1 > SD_V1_MAX:
                 v1 = SD_V1_MAX
@@ -423,7 +427,6 @@ class Engine:
             elif v1 < SD_V1_MIN:
                 v1 = SD_V1_MIN
                 self.v1_clamps += 1
-            v2 += v1 - fb
             y = v2 >= 0
             ones += y
             if bits is not None:

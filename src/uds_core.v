@@ -312,13 +312,14 @@ module uds_core #(
   wire [8:0] metal = (sq3 ^ sq5 ^ sq7 ^ frame[2]) ? 9'h0FF : 9'h100;
 
   // ------------------------------------------------------------- sigma-delta
-  // Second-order 1-bit loop, noise transfer function (1 - z^-1)^2, with the
-  // input at half scale (model: Engine.dac2):
+  // Second-order 1-bit loop, two delaying integrators, noise transfer
+  // function (1 - z^-1)^2, input at half scale (model: Engine.dac2):
   //   y   = v2 >= 0                    the pin, one clock after the update
   //   fb  = y ? +4096 : -4096
   //   v1 <= clamp(v1 + x - fb)         15 bits, saturating (a safety net only)
-  //   v2 <= v2 + v1_next - fb          17 bits: |v2| <= 51200 for any |x| <= 2048,
-  //                                    so it cannot overflow (sd2_bounds() in the model)
+  //   v2 <= v2 + v1 - 2 fb             17 bits: -45056 <= v2 <= 45050 for any
+  //                                    |x| <= 2048 (sd2_bounds() in the model)
+  // Both adders take registered values, so they work side by side.
   wire [4:0]  q     = c_env[7:3];
   wire [5:0]  qr    = {1'b0, q} + {3'b000, c_env[2:0]};
   wire        w8    = t < {1'b0, q};
@@ -338,7 +339,7 @@ module uds_core #(
   wire [15:0] s1    = {sd_v1[14], sd_v1} + x_fb;
   wire        ovf1  = s1[15] ^ s1[14];
   wire [14:0] v1_n  = ovf1 ? {s1[15], {14{~s1[15]}}} : s1[14:0];
-  wire [16:0] v2_n  = sd_v2 + {{2{v1_n[14]}}, v1_n} + {{4{y}}, 1'b1, 12'd0};   // + v1_n - fb
+  wire [16:0] v2_n  = sd_v2 + {{2{sd_v1[14]}}, sd_v1} + {{3{y}}, 1'b1, 13'd0};   // + v1 - 2 fb
 
   // When no voice sounds at the end of a frame, the next frame is silent:
   // restart the loop on the frame's last clock (its x is always 0), so that
