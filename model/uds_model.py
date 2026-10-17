@@ -499,8 +499,9 @@ def pattern_events(bank, index, bpm, loops=2, presets=PRESETS, fs=FS_TARGET):
 
 
 def write_wav(path, samples, rate=FS_TARGET, gain=3.0, slots=DEFAULT_SLOTS):
-    """16-bit mono WAV of render() output. gain 1.0 = the chip's real level
-    (a full-level voice reaches about 1/6 of the pin's swing)."""
+    """16-bit mono WAV of render() output (the voices' sum, before the DAC).
+    gain 1.0 = the level of the v0.1 first-order DAC, where a full-level voice
+    reaches about 1/6 of the pin's swing; the v0.2 DAC is 6 dB lower (1/12)."""
     import struct
     import wave
     scale = 32767.0 * gain / (frame_clks(slots) * 2048)

@@ -31,8 +31,30 @@ To fit in one tile there is no multiplier and no voice register file:
   triangle or the noise on each of those clocks.
 
 At 6 MHz the sample rate is 62.5 kHz (one frame is 96 clocks). Pitches and decay times scale with the clock.
-The audio output is a first-order sigma-delta bitstream: filter it with an RC low-pass (for example 1 kOhm
-and 10 nF) or use the Tiny Tapeout Audio Pmod.
+
+### Audio DAC: second-order sigma-delta
+
+The audio pin carries a 1-bit second-order sigma-delta bitstream at the full clock rate (6 Mbit/s). The DAC
+takes the voices' signal clock by clock (8 x or 1 x the triangle or noise, as above) and feeds it into two
+integrators: v1 += x - fb and v2 += v1 - 2 fb, where the output bit is 1 when v2 >= 0 and fb is +4096 or
+-4096 to match. The quantization noise is shaped by (1 - z^-1)^2: it is pushed far above the audio band, so
+quiet sounds and the tails of the decays stay clean instead of breaking up into single clicks, as they did
+with the first-order DAC of version 1. In the audio band (30 Hz to 16 kHz, behind a 15.9 kHz RC filter) the
+error relative to the sound is 18 to 27 dB lower than before over a whole bass drum, middle tom, snare or
+cymbal, and about 40 dB lower in the second half of each decay, where the old DAC crackled
+(`model/dac_analysis.py`; listen to `docs/audio/before.mp3` and `after.mp3`).
+
+- The integrators are 15 and 17 bits wide. v2 can be shown to stay within +-45 056 for any input the
+  voices can produce; v1 has a saturating limit as a safety net that the chip's own sounds never reach.
+- Silence is a clean mid-scale pattern, 0110 0110 ... (1.5 MHz), 48 ones in each 96-clock frame. The DAC
+  restarts at the end of every frame in which no voice sounds, so this holds after every decay or STOP.
+- Output level: to keep the loop stable the DAC input is at half scale, so the sound is 6 dB quieter than
+  with the first-order DAC. A full-level voice swings the filtered output by about 1/12 of the supply. Add
+  about 6 dB of gain after the filter (for example a gain of 2 in the amplifier) for the old loudness.
+- Filter: an RC low-pass at about 16 kHz (1 kOhm and 10 nF) is enough for listening. What is left above the
+  audio band is mostly the 62.5 kHz frame rate, about -43 dB of the supply (a little less than before, but
+  the sound is 6 dB quieter). If the output drives an amplifier with a wide input bandwidth or an ADC, a
+  second RC stage (for example 10 kOhm and 1 nF after the first) lowers it by another 17 dB.
 
 The engine is specified by a Python model (`model/uds_model.py`); the tests check the chip against it frame
 by frame, on the RTL and on the gate-level netlist.
@@ -57,7 +79,9 @@ Channels: 0 snare, 1 small tom, 2 middle tom, 3 big tom, 4 bass drum, 5 cymbal, 
 - balance: 0 = all tone ... 15 = almost all noise
 - level: 0 (silent) to 15
 
-Registers: 0 ID (`0xD5`), 1 VERSION (`0x12`: version 1, 2 voices).
+Registers: 0 ID (`0xD5`), 1 VERSION (`0x22`: version 2, 2 voices). Version 2 has the second-order DAC; a
+version 1 design (`0x12`, first-order DAC, never taped out) is 6 dB louder, so firmware can read VERSION to set
+its output gain.
 
 The chip takes one HIT per frame (16 us). After a HIT, wait until BUSY (uio[5]) goes low before sending the
 next message.
