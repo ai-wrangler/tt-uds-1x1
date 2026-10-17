@@ -356,10 +356,12 @@ async def test_dac(dut):
     await b.finish()
     lo, hi = M.sd2_bounds()
     m = b.model
+    chip = ("gate level: integrators not visible" if GL else
+            "chip at frame ends |v1| %d |v2| %d (equal to the model's)" % (b.v1_peak, b.v2_peak))
     dut._log.info("DAC over %d frames: model peaks |v1| %d (%.2f x 4096), |v2| %d (%.2f x 4096), "
-                  "clamps %d; chip peaks at frame ends |v1| %d |v2| %d; proven |v2| bound %d"
+                  "clamps %d; %s; proven |v2| bound %d"
                   % (b.checked, m.v1_peak, m.v1_peak / 4096, m.v2_peak, m.v2_peak / 4096,
-                     m.v1_clamps, b.v1_peak, b.v2_peak, max(-lo, hi)))
+                     m.v1_clamps, chip, max(-lo, hi)))
     assert m.v1_clamps == 0, "the v1 clamp acted"
     assert m.v1_peak < -M.SD_V1_MIN
     assert -m.v2_peak >= lo and m.v2_peak <= hi
