@@ -18,8 +18,8 @@ Python's >> on negative numbers is floor division, the same as Verilog's >>>.
 
 Timing
     One frame = WORD x slots clocks. The design target is fs = 62 500 Hz:
-    clk = 12 MHz for 4 voices (9 MHz for 3, 15 MHz for 5). Pitch and decay
-    are counted in frames, so they scale with the clock.
+    clk = 6 MHz for the 1x1 chip's 2 voices (9 MHz for 3, 12 MHz for 4).
+    Pitch and decay are counted in frames, so they scale with the clock.
 
 SPI messages (mode 0, MSB first, CS low for the whole message)
     HIT   0x18 | channel, then 3 bytes:
@@ -34,8 +34,11 @@ SPI messages (mode 0, MSB first, CS low for the whole message)
     READ  0x30 | register, then one byte: the chip answers on MISO
           register 0 ID (0xD5), 1 VERSION (0x10 | voices), 2 STATUS
     STOP  0x40: every voice goes silent
-    One HIT is taken per frame; send HITs at least 2 frames apart, or wait
-    for the BUSY pin to go low.
+    One HIT is taken per frame; wait for the BUSY pin to go low before the
+    next message (HITs about 2 frames apart).
+    Build options (src/project.v): with STATUS, register 2 is a bitmap of the
+    channels sounding; with TRIGGERS, a rising edge on ui_in[n] plays
+    channel n with its preset. The 1x1 chip has neither.
 
 Noise: channels 0-4 (snare, toms, bass drum) use low-passed LFSR noise,
 channels 5-7 (cymbal, hi-hats) use the metal source: four square waves XORed.
@@ -64,7 +67,7 @@ Per frame (each step() call)
 """
 
 WORD = 48
-DEFAULT_SLOTS = 4
+DEFAULT_SLOTS = 2                   # the 1x1 chip
 FS_TARGET = 62_500
 
 SNARE, SMALL_TOM, MID_TOM, BIG_TOM, BASS, CYMBAL, HH_CLOSED, HH_OPEN = range(8)
@@ -386,10 +389,10 @@ if __name__ == "__main__":
         f += int(FS_TARGET * (1.8 if ch == CYMBAL else 0.6))
     sections = [("one-shots: snare, small tom, mid tom, big tom, bass drum, cymbal, "
                  "closed hat, open hat", render(ev, f))]
-    for bank, idx, bpm, voices, label in ((U.PATTERNS, 0, 116, 4, "Rock 1, 4 voices"),
-                                          (U.BANK_B, 0, 124, 4, "House, 4 voices"),
-                                          (U.PATTERNS, 6, 128, 3, "Bossa nova, 3 voices"),
-                                          (U.PATTERNS, 6, 128, 4, "Bossa nova, 4 voices")):
+    for bank, idx, bpm, voices, label in ((U.PATTERNS, 0, 116, 2, "Rock 1"),
+                                          (U.BANK_B, 0, 124, 2, "House"),
+                                          (U.PATTERNS, 6, 128, 2, "Bossa nova"),
+                                          (U.PATTERNS, 13, 120, 2, "Disco")):
         ev, total = pattern_events(bank, idx, bpm, loops=2)
         sections.append((label, render(ev, total, slots=voices)))
     samples, t = [], 0.0

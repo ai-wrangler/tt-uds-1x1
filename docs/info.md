@@ -10,28 +10,32 @@ You can also include images in this folder and reference them in the markdown. E
 ## How it works
 
 UDS-1x1 is a digital homage to the Formanta UDS, a Soviet analog drum synthesizer from the 1980s. It plays
-eight drums: snare, small, middle and big tom, bass drum, cymbal, closed and open hi-hat. Four voices sound at
-once. Every hit carries its own sound: pitch, pitch sweep, decay, tone/noise balance and level, so an outside
-controller with knobs can shape each drum the way the UDS front panel does.
+eight drums: snare, small, middle and big tom, bass drum, cymbal, closed and open hi-hat, with two voices
+sounding at once. Every hit carries its own sound: pitch, pitch sweep, decay, tone/noise balance and level,
+so a controller with knobs can shape each drum the way the UDS front panel does.
 
 Each voice is a triangle oscillator with an exponential pitch (8 bits, 32 steps per octave), a pitch sweep
 that falls back to the set pitch in the first part of the decay, a noise source, and an exponential decay
 envelope. The drums use low-passed LFSR noise; the cymbal and hi-hats use a metallic source made of square
 waves XORed together.
 
-To fit four voices in one tile there is no multiplier and no voice register file:
+A new hit takes the voice of the same drum if it is still sounding (open and closed hi-hat count as one
+drum), else a free voice, else the quieter voice.
 
-- All voice state sits in one 192-bit shift register that moves one bit per clock. Each voice passes the end
+To fit in one tile there is no multiplier and no voice register file:
+
+- All voice state sits in one 96-bit shift register that moves one bit per clock. Each voice passes the end
   of it once per frame (48 clocks per voice), and its envelope and phase are updated bit by bit on the way.
 - Loudness is made in time. During its 48 clocks a voice adds 8 x its signal to the sigma-delta DAC on
   env/8 clocks and 1 x on env mod 8 clocks, so the DAC adds signal x env. The tone/noise balance picks the
   triangle or the noise on each of those clocks.
 
-At 12 MHz the sample rate is 62.5 kHz. The audio output is a first-order sigma-delta bitstream: filter it
-with an RC low-pass (for example 1 kOhm and 10 nF) or use the Tiny Tapeout Audio Pmod.
+At 6 MHz the sample rate is 62.5 kHz (one frame is 96 clocks). Pitches and decay times scale with the clock.
+The audio output is a first-order sigma-delta bitstream: filter it with an RC low-pass (for example 1 kOhm
+and 10 nF) or use the Tiny Tapeout Audio Pmod.
 
-The engine is specified by a Python model (`model/uds_model.py`) and the tests check the chip against it
-frame by frame.
+The engine is specified by a Python model (`model/uds_model.py`); the tests check the chip against it frame
+by frame, on the RTL and on the gate-level netlist.
 
 ## How to test
 
@@ -46,27 +50,27 @@ Keep CS low for a whole message.
 | STOP | `0x40`: all voices go silent |
 
 Channels: 0 snare, 1 small tom, 2 middle tom, 3 big tom, 4 bass drum, 5 cymbal, 6 closed hi-hat, 7 open hi-hat.
-A hit on the open or closed hi-hat cuts the other one off.
 
-- pitch p: oscillator frequency = (32 + p mod 32) x 2^(p div 32) x 62 500 / 65 536 Hz, 30.5 Hz to 7.7 kHz
-- decay: the envelope steps every 2^decay frames; about 35 steps from full level to silence
+- pitch p: oscillator frequency = (32 + p mod 32) x 2^(p div 32) x fs / 65 536, 30.5 Hz to 7.7 kHz at fs 62.5 kHz
+- decay: the envelope steps every 2^decay frames (13 to 15 act as 13); about 35 steps from full level to silence
 - sweep: bits 2..0 set the depth (0 = none, 7 = up to 127 pitch steps); bit 3 is reserved, send 0
 - balance: 0 = all tone ... 15 = almost all noise
 - level: 0 (silent) to 15
 
-Registers: 0 ID (`0xD5`), 1 VERSION (`0x14`: version 1, 4 voices), 2 STATUS (bit n = channel n is sounding).
+Registers: 0 ID (`0xD5`), 1 VERSION (`0x12`: version 1, 2 voices).
 
 The chip takes one HIT per frame (16 us). After a HIT, wait until BUSY (uio[5]) goes low before sending the
 next message.
 
-### Without a computer
+Good starting sounds (pitch, decay, sweep, balance, level): snare 80, 7, 4, 11, 13; small tom 84, 8, 5, 2, 12;
+middle tom 70, 8, 5, 2, 12; big tom 56, 9, 5, 2, 12; bass drum 20, 9, 6, 1, 15; cymbal 255, 11, 0, 15, 11;
+closed hi-hat 255, 6, 0, 15, 10; open hi-hat 255, 9, 0, 15, 10.
 
-Set the clock to 12 MHz and give a rising edge on one of ui_in[7:0]: that drum plays with its built-in sound.
-The segments of the 7-segment display light while their drums sound (the hi-hats share segment G).
+The 7-segment display shows the number of the channel last hit, so you can see that a HIT arrived.
 
 ## External hardware
 
 - Tiny Tapeout Audio Pmod on the bidirectional Pmod header (audio on uio[7] and uio[6]), or an RC filter and
   an amplifier on uo_out[7].
-- Any SPI controller, for example the RP2040 on the demo board, a laptop GUI behind a USB bridge, or an ESP32
-  panel with knobs.
+- Any SPI controller: the RP2040 on the demo board, a laptop GUI behind a USB bridge, or an ESP32 panel with
+  knobs.

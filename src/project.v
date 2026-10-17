@@ -24,7 +24,7 @@ module tt_um_ai_wrangler_uds1x1 (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  // Build options. 1x1 tile: 3 voices, no pin triggers, no STATUS.
+  // Build options. 1x1 tile: 2 voices, no pin triggers, no STATUS (run at 6 MHz).
   localparam [3:0] VOICES   = 4'd2;
   localparam       TRIGGERS = 0;
   localparam       STATUS   = 0;
