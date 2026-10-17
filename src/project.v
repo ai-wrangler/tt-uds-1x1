@@ -23,7 +23,7 @@ module tt_um_ai_wrangler_uds1x1 (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  localparam [3:0] VOICES = 4'd4;
+  localparam [3:0] VOICES = 4'd3;
 
   wire        miso, spi_idle, hit_done, stop, payload_msb;
   wire        commit_shift, preset_load;
