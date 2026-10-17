@@ -1,4 +1,4 @@
-"""UDS-1x1 golden model v0.1: the specification of the chip's sound engine.
+"""UDS-1x1 golden model v0.2: the specification of the chip's sound engine.
 
 The RTL must match this model exactly: for the same HITs, STOPs and pin
 triggers it must put the same number of 1s on the audio pin in every frame.
@@ -32,7 +32,7 @@ SPI messages (mode 0, MSB first, CS low for the whole message)
           byte 3  balance[7:4] tone/noise: 0 = all triangle, 15 = 15/16 noise
                   level[3:0]   the envelope starts at 17 x level (0 = silent)
     READ  0x30 | register, then one byte: the chip answers on MISO
-          register 0 ID (0xD5), 1 VERSION (0x10 | voices), 2 STATUS
+          register 0 ID (0xD5), 1 VERSION (0x20 | voices), 2 STATUS
     STOP  0x40: every voice goes silent
     One HIT is taken per frame; wait for the BUSY pin to go low before the
     next message (HITs about 2 frames apart).
@@ -62,8 +62,28 @@ Per frame (each step() call)
        and if (frame mod 2^decay) == 0: env -= max(env >> 3, 1).
        The chosen slot is then replaced by the new HIT (env = 17 x level,
        phase = 0x4000); after a STOP every env is 0.
-    3. The DAC: a 12-bit first-order sigma-delta. Over the frame it adds
-       2048 per clock plus the voices' sum; the frame's 1s are the carries.
+    3. The DAC, clock by clock (see "Sigma-delta DAC" below): each slot's
+       48-clock window feeds x = 8 x src on env >> 3 clocks, 1 x src on
+       env & 7 clocks and 0 on the rest, where src is the triangle or the
+       noise by the balance pattern; the loop turns x into one output bit per
+       clock. step() returns the frame's count of 1s.
+
+Sigma-delta DAC (v0.2, VERSION register 0x22)
+    A 1-bit second-order loop, noise transfer function (1 - z^-1)^2, with
+    the input at half scale (feedback +-4096 for an x of at most +-2048):
+        y   = 1 if v2 >= 0 else 0            (the bit on the pin next clock)
+        fb  = +4096 if y else -4096
+        v1 <- clamp(v1 + x - fb, -16384, 16383)  15 bits, saturating
+        v2 <- v2 + v1 - fb                        17 bits, never overflows
+    Reset: v1 = 0, v2 = -1 (the pin is low in reset and idles as 0110 0110 ...).
+    Boundedness, for ANY input with |x| <= 2048 (proof in sd2_bounds()):
+    while v2 >= 0 the feedback lowers v1 by at least 2048 per clock, and v2
+    only rises while v1 > 4096, so after v2 turns non-negative it rises for
+    at most 5 more clocks; hence |v2| <= 51200 < 2^16. The v1 clamp is a
+    safety net: the chip's own signals keep |v1| below about 2.7 x 4096
+    (see docs/sd2), and the tests check that it never acts.
+    The first-order DAC of v0.1 (DAC_ORDER = 1) is kept for comparisons:
+        acc <- acc + 2048 + x (12 bits), the bit is the carry.
 """
 
 WORD = 48
@@ -78,13 +98,20 @@ METAL_CHANNELS = (CYMBAL, HH_CLOSED, HH_OPEN)
 CMD_HIT, CMD_READ, CMD_STOP = 0x18, 0x30, 0x40
 REG_ID, REG_VERSION, REG_STATUS = 0, 1, 2
 CHIP_ID = 0xD5
-VERSION = 1
+VERSION = 2                         # 1: first-order DAC, 2: second-order DAC
 
 LFSR_BITS = 17                      # x^17 + x^14 + 1, period 131 071 frames
 LFSR_RESET = 1
 METAL_HALF_PERIODS = (3, 4, 5, 7)   # frames; the 4 is bit 2 of the frame counter
 PHASE_START = 0x4000                # the triangle starts at its zero crossing
 FRAME_BITS = 13                     # decay values 13-15 behave as 13
+
+# Sigma-delta DAC (second order, see the docstring)
+SD_FB = 4096                        # feedback: x of +-2048 is half scale
+SD_V1_BITS, SD_V2_BITS = 15, 17
+SD_V1_MIN, SD_V1_MAX = -(1 << (SD_V1_BITS - 1)), (1 << (SD_V1_BITS - 1)) - 1
+SD_V2_MIN, SD_V2_MAX = -(1 << (SD_V2_BITS - 1)), (1 << (SD_V2_BITS - 1)) - 1
+SD_V2_RESET = -1
 
 # Default sound per channel: pitch, sweep, decay, balance, level.
 # The pin triggers use these; the bridge sends its own values.
@@ -171,6 +198,43 @@ def window_weights(env, balance):
 WEIGHTS = tuple(tuple(window_weights(e, b) for b in range(16)) for e in range(256))
 
 
+def window_x(env, balance, tri, noise):
+    """The DAC input x on each clock t = 0..47 of a voice's window, exactly as
+    the RTL builds it: 8 x src while t < q, 1 x src while t < q + r, else 0,
+    with q, r = env >> 3, env & 7, and src = noise on the clocks where
+    bitrev4(t) < balance, else the triangle."""
+    q, qr = env >> 3, (env >> 3) + (env & 7)
+    xs = [0] * WORD
+    for t in range(qr):
+        src = noise if BITREV4[t & 15] < balance else tri
+        xs[t] = 8 * src if t < q else src
+    return xs
+
+
+def sd2_bounds(xmax=2048, fb=SD_FB, v1_min=SD_V1_MIN, v1_max=SD_V1_MAX):
+    """Worst-case |v2| of the second-order loop for any input |x| <= xmax.
+
+    While v2 >= 0 (y = 1) every clock lowers v1 by at least fb - xmax, and v2
+    changes by v1' - fb, so it rises only while v1' > fb. v2 turns
+    non-negative from v2 <= -1 in one step of at most v1_max + fb. From there
+    it can rise by the sum of the positive v1' - fb, with v1' falling from
+    v1_max by fb - xmax per clock. The negative side is the mirror image
+    (x >= -xmax, v1 >= v1_min). Returns (lowest, highest) v2."""
+    d = fb - xmax
+    assert d > 0
+    hi = -1 + v1_max + fb
+    v1 = v1_max - d
+    while v1 > fb:
+        hi += v1 - fb
+        v1 -= d
+    lo = 0 + v1_min - fb
+    v1 = v1_min + d
+    while v1 < -fb:
+        lo += v1 + fb
+        v1 += d
+    return lo, hi
+
+
 def group(ch):
     return HH_CLOSED if ch == HH_OPEN else ch      # open and closed hat share a voice
 
@@ -191,16 +255,21 @@ class Slot:
 
 
 class Engine:
-    def __init__(self, slots=DEFAULT_SLOTS, check=False, triggers=True, status=True):
+    def __init__(self, slots=DEFAULT_SLOTS, check=False, triggers=True, status=True, dac_order=2):
         self.slots = [Slot() for _ in range(slots)]
         self.check = check
         self.triggers = triggers                   # build option: pin triggers
         self.has_status = status                   # build option: STATUS register
+        self.dac_order = dac_order                 # 2: this chip; 1: the v0.1 DAC, for comparisons
         self.frame = 0
         self.lfsr = LFSR_RESET
         self.metal_count = [0, 0, 0]               # counters for half periods 3, 5, 7
         self.metal_sq = [0, 0, 0]
-        self.acc = 0                               # sigma-delta integrator
+        self.acc = 0                               # first-order DAC: integrator
+        self.v1, self.v2 = 0, SD_V2_RESET          # second-order DAC: integrators
+        self.v1_peak = self.v2_peak = 0            # largest |v1|, |v2| so far
+        self.v1_clamps = 0                         # clocks on which the v1 clamp acted
+        self.bits = None                           # set to a list to record the pin, clock by clock
         self.pending = None                        # (channel, payload) waiting for a slot
         self.kill_pending = False
         self.pins = 0                              # pin trigger levels
@@ -283,14 +352,17 @@ class Engine:
         kill, self.kill_pending = self.kill_pending, False
         self.last_target = commit[0] if commit else None
 
-        # 2. voices
+        # 2. voices: each plays its 48-clock window into the DAC input
         drum, metal = self.noise()
         total = 0
+        xs = []
         for i, s in enumerate(self.slots):
             env = s.env
+            n = metal if s.ch in METAL_CHANNELS else drum
+            wx = window_x(env, s.balance, triangle(s.phase), n)
+            xs += wx
             if env:
                 wt, wn = WEIGHTS[env][s.balance]
-                n = metal if s.ch in METAL_CHANNELS else drum
                 total += wt * triangle(s.phase) + wn * n
             pe = effective_pitch(s.pitch, env, s.sweep)
             s.phase = (s.phase + increment(pe)) & 0xFFFF
@@ -314,13 +386,58 @@ class Engine:
                 self.metal_count[k] += 1
         self.frame = (f + 1) & ((1 << FRAME_BITS) - 1)
 
-        # 4. sigma-delta: 2048 per clock plus the voices
-        x = self.acc + frame_clks(len(self.slots)) * 2048 + total
-        self.acc = x & 0xFFF
+        # 4. the DAC, one clock per x
         if self.check:
             assert abs(total) <= len(self.slots) * 65_280
+            assert sum(xs) == total
         self.last_total = total
-        return x >> 12
+        self.last_x = xs
+        return self.dac2(xs) if self.dac_order == 2 else self.dac1(xs)
+
+    def dac2(self, xs):
+        """Second-order sigma-delta over one frame; returns the count of 1s.
+        The pin in clock c + 1 is y computed from v2 after clock c's update,
+        which is how test/tb.v counts a frame."""
+        v1, v2 = self.v1, self.v2
+        ones = 0
+        bits = self.bits
+        for x in xs:
+            fb = SD_FB if v2 >= 0 else -SD_FB
+            v1 += x - fb
+            if v1 > SD_V1_MAX:
+                v1 = SD_V1_MAX
+                self.v1_clamps += 1
+            elif v1 < SD_V1_MIN:
+                v1 = SD_V1_MIN
+                self.v1_clamps += 1
+            v2 += v1 - fb
+            y = v2 >= 0
+            ones += y
+            if bits is not None:
+                bits.append(int(y))
+            if abs(v1) > self.v1_peak:
+                self.v1_peak = abs(v1)
+            if abs(v2) > self.v2_peak:
+                self.v2_peak = abs(v2)
+        if self.check:
+            assert SD_V2_MIN <= v2 <= SD_V2_MAX
+        self.v1, self.v2 = v1, v2
+        return ones
+
+    def dac1(self, xs):
+        """The v0.1 first-order DAC: acc + 2048 + x, the bit is the carry."""
+        acc = self.acc
+        ones = 0
+        bits = self.bits
+        for x in xs:
+            acc += 2048 + x
+            c = acc >> 12
+            acc &= 0xFFF
+            ones += c
+            if bits is not None:
+                bits.append(c)
+        self.acc = acc
+        return ones
 
 
 def render(events, frames, slots=DEFAULT_SLOTS, check=False):

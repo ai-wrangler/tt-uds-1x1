@@ -6,7 +6,7 @@
  * ui_in[7:0]   pin triggers (if TRIGGERS): a rising edge plays channel 0..7 with its preset
  * uo_out[6:0]  7-segment display: with STATUS, segments light while their drum sounds;
  *              without, the digit of the channel last hit
- * uo_out[7]    audio (sigma-delta bitstream, low-pass filter it)
+ * uo_out[7]    audio (second-order sigma-delta bitstream, low-pass filter it)
  * uio[0] CS_N in, uio[1] MOSI in, uio[2] MISO out, uio[3] SCK in
  * uio[4] FRAME out (high during voice window 0), uio[5] BUSY out
  * uio[6] audio out (left), uio[7] audio out (right): same signal, the chip is mono
@@ -39,7 +39,7 @@ module tt_um_ai_wrangler_uds1x1 (
 
   uds_spi #(
       .CHIP_ID    (8'hD5),
-      .VERSION_REG({4'd1, VOICES})
+      .VERSION_REG({4'd2, VOICES})        // 2: second-order sigma-delta DAC
   ) spi (
       .clk         (clk),
       .rst_n       (rst_n),

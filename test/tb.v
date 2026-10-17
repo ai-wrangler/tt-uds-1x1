@@ -59,6 +59,18 @@ module tb ();
   reg [31:0] frame_count;   // complete frames since reset
   reg        frame_tick;    // toggles when a frame completes
 
+`ifndef GL_TEST
+  // RTL only: the DAC integrators at the end of each frame (the state the
+  // model has after step()), sampled together with frame_ones.
+  reg [14:0] frame_v1;
+  reg [16:0] frame_v2;
+  always @(posedge clk)
+    if (rst_n && cyc != 32'd0 && cyc % FRAME == 0) begin
+      frame_v1 <= user_project.core.sd_v1;
+      frame_v2 <= user_project.core.sd_v2;
+    end
+`endif
+
   always @(posedge clk) begin
     if (!rst_n) begin
       cyc         <= 32'd0;
