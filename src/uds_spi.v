@@ -98,7 +98,8 @@ module uds_spi #(
 
   // Channel register: from the HIT command byte, or from a pin trigger.
   always @(posedge clk) begin
-    if (preset_load) ch <= preset_ch;
+    if (!rst_n) ch <= 3'd0;
+    else if (preset_load) ch <= preset_ch;
     else if (cmd_end && byte_in[7:3] == 5'b00011) ch <= byte_in[2:0];
   end
 

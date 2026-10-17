@@ -21,7 +21,9 @@
 `default_nettype none
 
 module uds_core #(
-    parameter N = 4                 // voices
+    parameter N        = 4,         // voices
+    parameter TRIGGERS = 1,         // 1: pin triggers on trig[7:0]
+    parameter STATUS   = 1          // 1: per-channel STATUS register
 ) (
     input  wire        clk,
     input  wire        rst_n,
@@ -51,7 +53,7 @@ module uds_core #(
   // ------------------------------------------------------------------ timing
   reg  [5:0]    t;                  // clock within the voice window, 0..47
   reg  [VW-1:0] v;                  // voice window, 0..N-1
-  reg  [14:0]   frame;
+  reg  [12:0]   frame;              // decay up to 13: 2^13 frames per step
   reg           clearing;           // first frame after reset: fill the ring with 0
   wire          wend = t == 6'd47;
   wire          fend = wend && v == N - 1;
@@ -60,13 +62,13 @@ module uds_core #(
     if (!rst_n) begin
       t        <= 6'd0;
       v        <= {VW{1'b0}};
-      frame    <= 15'd0;
+      frame    <= 13'd0;
       clearing <= 1'b1;
     end else begin
       t <= wend ? 6'd0 : t + 6'd1;
       if (wend) v <= (v == N - 1) ? {VW{1'b0}} : v + 1'b1;
       if (fend) begin
-        frame    <= frame + 15'd1;
+        frame    <= frame + 13'd1;
         clearing <= 1'b0;
       end
     end
@@ -115,7 +117,7 @@ module uds_core #(
 
   // decay is read on clock 0 of the window, when word bit b is ring[NL-1-b]
   wire [3:0]  c0_decay = {ring[NL-9], ring[NL-10], ring[NL-11], ring[NL-12]};
-  wire [14:0] dmask    = ~(15'h7FFF << c0_decay);
+  wire [12:0] dmask    = ~(13'h1FFF << c0_decay);  // decay 13..15 act as 13
 
   always @(posedge clk) begin
     if (wend) begin
@@ -231,7 +233,7 @@ module uds_core #(
   reg  [7:0] trig_s, served;
   wire [7:0] waiting  = trig_s & ~served;
   wire [7:0] first    = waiting & (~waiting + 8'd1);      // lowest waiting pin
-  assign preset_load  = fend && !pend && spi_idle && |waiting;
+  assign preset_load  = TRIGGERS != 0 && fend && !pend && spi_idle && |waiting;
 
   always @(*) begin
     case (first)
@@ -267,14 +269,14 @@ module uds_core #(
       served    <= 8'd0;
       status    <= 8'd0;
     end else begin
-      trig_s    <= trig;
+      trig_s    <= TRIGGERS != 0 ? trig : 8'd0;
       served    <= (served | (preset_load ? first : 8'd0)) & trig_s;
       pend      <= hit_done | preset_load | (pend & !fend);
       kill_pend <= stop | (kill_pend & !fend);
       if (fend) begin
         commit <= pend;
         kill   <= kill_pend;
-        status <= status_next;
+        status <= STATUS != 0 ? status_next : 8'd0;
       end
     end
     if (fend && pend) tgt <= choice;

@@ -32,7 +32,7 @@ VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 endif
 
 # Clocks per frame for the testbench: 48 x VOICES, read from src/project.v
-VOICES := $(shell sed -n "s/.*localparam \[3:0\] VOICES = 4'd\([0-9]*\);.*/\1/p" $(SRC_DIR)/project.v)
+VOICES := $(shell sed -n "s/.*localparam \[3:0\] VOICES *= 4'd\([0-9]*\);.*/\1/p" $(SRC_DIR)/project.v)
 COMPILE_ARGS += -Ptb.FRAME=$(shell expr 48 \* $(VOICES))
 
 # Allow sharing configuration between design and testbench via `include`:

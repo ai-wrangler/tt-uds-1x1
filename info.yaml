@@ -3,9 +3,9 @@ project:
   title:        "UDS-1x1 drum synthesizer"      # Project title
   author:       "Juris Vitols"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Four-voice drum synth after the Soviet Formanta UDS, played over SPI or pin triggers"      # One line description of what your project does
+  description:  "Three-voice drum synth after the Soviet Formanta UDS, played over SPI"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     12000000       # Clock frequency in Hz (or 0 if not applicable)
+  clock_hz:     9000000       # Clock frequency in Hz (or 0 if not applicable)
 
   # How many tiles your design occupies? A single tile is about 167x108 uM.
   tiles: "1x1"          # Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
@@ -25,23 +25,23 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "TRIG_SNARE"
-  ui[1]: "TRIG_SMALL_TOM"
-  ui[2]: "TRIG_MID_TOM"
-  ui[3]: "TRIG_BIG_TOM"
-  ui[4]: "TRIG_BASS_DRUM"
-  ui[5]: "TRIG_CYMBAL"
-  ui[6]: "TRIG_HIHAT_CLOSED"
-  ui[7]: "TRIG_HIHAT_OPEN"
+  ui[0]: ""
+  ui[1]: ""
+  ui[2]: ""
+  ui[3]: ""
+  ui[4]: ""
+  ui[5]: ""
+  ui[6]: ""
+  ui[7]: ""
 
   # Outputs
-  uo[0]: "SEG_A snare"
-  uo[1]: "SEG_B small tom"
-  uo[2]: "SEG_C mid tom"
-  uo[3]: "SEG_D big tom"
-  uo[4]: "SEG_E bass drum"
-  uo[5]: "SEG_F cymbal"
-  uo[6]: "SEG_G hi-hat"
+  uo[0]: "SEG_A"
+  uo[1]: "SEG_B"
+  uo[2]: "SEG_C"
+  uo[3]: "SEG_D"
+  uo[4]: "SEG_E"
+  uo[5]: "SEG_F"
+  uo[6]: "SEG_G"
   uo[7]: "AUDIO"
 
   # Bidirectional pins

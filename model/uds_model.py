@@ -25,7 +25,7 @@ SPI messages (mode 0, MSB first, CS low for the whole message)
     HIT   0x18 | channel, then 3 bytes:
           byte 1  pitch        increment = (32 + p[4:0]) << p[7:5] per frame,
                                on a 16-bit phase: 30.5 Hz (p=0) to 7.69 kHz (p=255)
-          byte 2  decay[7:4]   the envelope steps every 2^decay frames
+          byte 2  decay[7:4]   the envelope steps every 2^decay frames (13-15 = 13)
                   sweep[3:0]   bits 2:0 amount s (0 = off), bit 3 reserved (0):
                                the pitch starts (env - 128) >> (7 - s) steps
                                higher and falls back while env >= 128
@@ -80,7 +80,7 @@ LFSR_BITS = 17                      # x^17 + x^14 + 1, period 131 071 frames
 LFSR_RESET = 1
 METAL_HALF_PERIODS = (3, 4, 5, 7)   # frames; the 4 is bit 2 of the frame counter
 PHASE_START = 0x4000                # the triangle starts at its zero crossing
-FRAME_BITS = 15
+FRAME_BITS = 13                     # decay values 13-15 behave as 13
 
 # Default sound per channel: pitch, sweep, decay, balance, level.
 # The pin triggers use these; the bridge sends its own values.
@@ -187,9 +187,11 @@ class Slot:
 
 
 class Engine:
-    def __init__(self, slots=DEFAULT_SLOTS, check=False):
+    def __init__(self, slots=DEFAULT_SLOTS, check=False, triggers=True, status=True):
         self.slots = [Slot() for _ in range(slots)]
         self.check = check
+        self.triggers = triggers                   # build option: pin triggers
+        self.has_status = status                   # build option: STATUS register
         self.frame = 0
         self.lfsr = LFSR_RESET
         self.metal_count = [0, 0, 0]               # counters for half periods 3, 5, 7
@@ -201,6 +203,7 @@ class Engine:
         self.served = 0                            # pins already turned into a hit
         self.status_reg = 0
         self.last_target = None
+        self.choices = {"retrigger": 0, "free": 0, "steal": 0}
 
     # -- control, between frames ------------------------------------------
     def hit(self, ch, payload):
@@ -214,7 +217,7 @@ class Engine:
 
     def set_pins(self, mask):
         """Pin trigger levels (ui_in) as seen at the next frame boundary."""
-        self.pins = mask & 0xFF
+        self.pins = mask & 0xFF if self.triggers else 0
 
     def read(self, reg):
         if reg == REG_ID:
@@ -240,10 +243,13 @@ class Engine:
         g = group(ch)
         for i, s in enumerate(self.slots):          # same drum already sounding: retrigger it
             if s.env and group(s.ch) == g:
+                self.choices["retrigger"] += 1
                 return i
         for i, s in enumerate(self.slots):          # else the first free slot
             if s.env == 0:
+                self.choices["free"] += 1
                 return i
+        self.choices["steal"] += 1
         return min(range(len(self.slots)), key=lambda i: (self.slots[i].env >> 5, i))
 
     # -- one audio frame ---------------------------------------------------
@@ -269,7 +275,7 @@ class Engine:
             self.served |= 1 << p
             self.pending = (p, hit_bytes(*PRESETS[p]))
         self.served &= self.pins
-        self.status_reg = self.status()
+        self.status_reg = self.status() if self.has_status else 0
         kill, self.kill_pending = self.kill_pending, False
         self.last_target = commit[0] if commit else None
 
@@ -284,7 +290,7 @@ class Engine:
                 total += wt * triangle(s.phase) + wn * n
             pe = effective_pitch(s.pitch, env, s.sweep)
             s.phase = (s.phase + increment(pe)) & 0xFFFF
-            if env and (f & ((1 << s.decay) - 1)) == 0:
+            if env and (f & ((1 << min(s.decay, FRAME_BITS)) - 1)) == 0:
                 d = env >> 3
                 s.env = env - (d if d else 1)
             if kill:
@@ -355,7 +361,7 @@ def pattern_events(bank, index, bpm, loops=2, presets=PRESETS, fs=FS_TARGET):
     return events, total
 
 
-def write_wav(path, samples, rate=FS_TARGET, gain=4.0, slots=DEFAULT_SLOTS):
+def write_wav(path, samples, rate=FS_TARGET, gain=3.0, slots=DEFAULT_SLOTS):
     """16-bit mono WAV of render() output. gain 1.0 = the chip's real level
     (a full-level voice reaches about 1/6 of the pin's swing)."""
     import struct
@@ -391,4 +397,5 @@ if __name__ == "__main__":
         print("%4.1f s  %s" % (t, label))
         samples += s + gap
         t += (len(s) + len(gap)) / FS_TARGET
-    write_wav(out + "/model_demo.wav", samples)
+    peak = max(abs(v) for v in samples)
+    write_wav(out + "/model_demo.wav", samples, gain=0.9 * frame_clks() * 2048 / peak)

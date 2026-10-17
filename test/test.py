@@ -20,8 +20,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "model"))
 import uds_model as M  # noqa: E402
 
-with open(os.path.join(HERE, "..", "src", "project.v")) as _f:     # the chip's voice count
-    VOICES = int(re.search(r"localparam \[3:0\] VOICES = 4'd(\d+);", _f.read()).group(1))
+with open(os.path.join(HERE, "..", "src", "project.v")) as _f:     # the chip's build options
+    _top = _f.read()
+VOICES = int(re.search(r"localparam \[3:0\] VOICES\s*= 4'd(\d+);", _top).group(1))
+TRIGGERS = int(re.search(r"localparam\s+TRIGGERS\s*= (\d);", _top).group(1))
+STATUS = int(re.search(r"localparam\s+STATUS\s*= (\d);", _top).group(1))
+DIGITS = (0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07)       # 7-segment 0..7
 GL = os.environ.get("GATES") == "yes"   # gate-level runs are much slower: shorter waits
 F = M.frame_clks(VOICES)        # clocks per frame
 HALF = 4                        # SPI: clocks per SCK half period
@@ -32,7 +36,7 @@ CS, MOSI, MISO, SCK = 0, 1, 2, 3
 class Bench:
     def __init__(self, dut):
         self.dut = dut
-        self.model = M.Engine(VOICES, check=True)
+        self.model = M.Engine(VOICES, check=True, triggers=bool(TRIGGERS), status=bool(STATUS))
         self.before = {}        # frame -> actions on the model before it steps that frame
         self.checked = 0        # frames compared so far
         self.errors = 0
@@ -161,7 +165,7 @@ class Bench:
         await self.frames(frames)
         assert self.checked > 0
         assert self.errors == 0, "%d of %d frames differ from the model" % (self.errors, self.checked)
-        self.dut._log.info("%d frames match the model" % self.checked)
+        self.dut._log.info("%d frames match the model; slot choices %s" % (self.checked, self.model.choices))
 
 
 def random_params(rng):
@@ -191,7 +195,7 @@ async def test_presets(dut):
     await b.finish()
 
 
-@cocotb.test()
+@cocotb.test(skip=not STATUS)
 async def test_status(dut):
     """STATUS shows the drums that sound; the 7-segment display follows it."""
     b = Bench(dut)
@@ -238,7 +242,7 @@ async def test_long_sounds(dut):
     await b.finish()
 
 
-@cocotb.test()
+@cocotb.test(skip=not TRIGGERS)
 async def test_pin_triggers(dut):
     """Rising edges on ui_in play the presets; several at once are taken in turn."""
     b = Bench(dut)
@@ -256,4 +260,16 @@ async def test_pin_triggers(dut):
     await b.frames(40)
     await b.pins(0)
     await b.frames(200)
+    await b.finish()
+
+
+@cocotb.test(skip=bool(STATUS))
+async def test_display_digit(dut):
+    """Without STATUS the display shows the digit of the channel last hit."""
+    b = Bench(dut)
+    await b.start()
+    await b.frames(2)
+    for ch in (4, 0, 7, 2):
+        await b.hit(ch, M.PRESETS[ch])
+        assert int(dut.uo_out.value) & 0x7F == DIGITS[ch]
     await b.finish()

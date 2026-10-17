@@ -3,8 +3,9 @@
  * Copyright (c) 2026 Juris Vitols
  * SPDX-License-Identifier: Apache-2.0
  *
- * ui_in[7:0]   pin triggers: a rising edge plays channel 0..7 with its preset
- * uo_out[6:0]  7-segment display: segments light while their drum sounds
+ * ui_in[7:0]   pin triggers (if TRIGGERS): a rising edge plays channel 0..7 with its preset
+ * uo_out[6:0]  7-segment display: with STATUS, segments light while their drum sounds;
+ *              without, the digit of the channel last hit
  * uo_out[7]    audio (sigma-delta bitstream, low-pass filter it)
  * uio[0] CS_N in, uio[1] MOSI in, uio[2] MISO out, uio[3] SCK in
  * uio[4] FRAME out (high during voice window 0), uio[5] BUSY out
@@ -23,7 +24,10 @@ module tt_um_ai_wrangler_uds1x1 (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  localparam [3:0] VOICES = 4'd4;
+  // Build options. 1x1 tile: 3 voices, no pin triggers, no STATUS.
+  localparam [3:0] VOICES   = 4'd3;
+  localparam       TRIGGERS = 0;
+  localparam       STATUS   = 0;
 
   wire        miso, spi_idle, hit_done, stop, payload_msb;
   wire        commit_shift, preset_load;
@@ -57,7 +61,9 @@ module tt_um_ai_wrangler_uds1x1 (
   );
 
   uds_core #(
-      .N(VOICES)
+      .N       (VOICES),
+      .TRIGGERS(TRIGGERS),
+      .STATUS  (STATUS)
   ) core (
       .clk         (clk),
       .rst_n       (rst_n),
@@ -78,7 +84,21 @@ module tt_um_ai_wrangler_uds1x1 (
       .frame_sync  (frame_sync)
   );
 
-  assign uo_out  = {audio, status[6] | status[7], status[5:0]};
+  reg [6:0] digit;
+  always @(*) begin
+    case (hit_ch)
+      3'd0:    digit = 7'h3F;
+      3'd1:    digit = 7'h06;
+      3'd2:    digit = 7'h5B;
+      3'd3:    digit = 7'h4F;
+      3'd4:    digit = 7'h66;
+      3'd5:    digit = 7'h6D;
+      3'd6:    digit = 7'h7D;
+      default: digit = 7'h07;
+    endcase
+  end
+
+  assign uo_out  = {audio, STATUS != 0 ? {status[6] | status[7], status[5:0]} : digit};
   assign uio_out = {audio, audio, busy, frame_sync, 1'b0, miso, 2'b00};
   assign uio_oe  = 8'b1111_0100;
 
