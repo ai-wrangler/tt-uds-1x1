@@ -1,5 +1,5 @@
 /*
- * UDS-1x1 voice engine. Bit-exact with model/uds_model.py (v0.1).
+ * UDS-1x1 voice engine. Bit-exact with model/uds_model.py (v0.2).
  *
  * All voice state is one shift register, the ring: N words of 48 bits that
  * move one bit per clock, so each voice passes the end of the ring once per
@@ -15,9 +15,10 @@
  *
  * Sound: no multiplier. On the last clock of window v-1 the engine reads
  * voice v's triangle, envelope and balance from the ring. During window v it
- * adds 8 x signal to the sigma-delta on env>>3 clocks and 1 x signal on
+ * feeds 8 x signal to the sigma-delta on env>>3 clocks and 1 x signal on
  * env&7 clocks; on each of those clocks the signal is the triangle or the
- * noise, by a fixed pattern set by the balance.
+ * noise, by a fixed pattern set by the balance. The DAC is a second-order
+ * 1-bit sigma-delta (see the end of the file).
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -44,7 +45,7 @@ module uds_core #(
 
     input  wire [7:0]  trig,        // pin triggers, one per channel
     output reg  [7:0]  status,      // channels sounding, latched once per frame
-    output reg         audio,       // sigma-delta output
+    output wire        audio,       // sigma-delta output (second order)
     output wire        busy,        // a HIT is waiting or being written
     output wire        frame_sync   // high during voice window 0
 );
@@ -311,7 +312,14 @@ module uds_core #(
   wire [8:0] metal = (sq3 ^ sq5 ^ sq7 ^ frame[2]) ? 9'h0FF : 9'h100;
 
   // ------------------------------------------------------------- sigma-delta
-  reg  [11:0] acc;
+  // Second-order 1-bit loop, two delaying integrators, noise transfer
+  // function (1 - z^-1)^2, input at half scale (model: Engine.dac2):
+  //   y   = v2 >= 0                    the pin, one clock after the update
+  //   fb  = y ? +4096 : -4096
+  //   v1 <= clamp(v1 + x - fb)         15 bits, saturating (a safety net only)
+  //   v2 <= v2 + v1 - 2 fb             17 bits: -45056 <= v2 <= 45050 for any
+  //                                    |x| <= 2048 (sd2_bounds() in the model)
+  // Both adders take registered values, so they work side by side.
   wire [4:0]  q     = c_env[7:3];
   wire [5:0]  qr    = {1'b0, q} + {3'b000, c_env[2:0]};
   wire        w8    = t < {1'b0, q};
@@ -321,16 +329,33 @@ module uds_core #(
   wire [11:0] x     = clearing ? 12'd0 :
                       w8 ? {src, 3'b000} :
                       w1 ? {{3{src[8]}}, src} : 12'd0;
-  wire [12:0] sum   = {1'b0, acc} + {1'b0, ~x[11], x[10:0]};   // acc + 2048 + x
+
+  reg  [14:0] sd_v1;
+  reg  [16:0] sd_v2;
+  wire        y     = ~sd_v2[16];
+  // x - fb in 16 bits, no logic: x is in [-2048, 2047], so x -/+ 4096 only
+  // changes the bits above bit 11
+  wire [15:0] x_fb  = {{3{y}}, ~x[11], x};
+  wire [15:0] s1    = {sd_v1[14], sd_v1} + x_fb;
+  wire        ovf1  = s1[15] ^ s1[14];
+  wire [14:0] v1_n  = ovf1 ? {s1[15], {14{~s1[15]}}} : s1[14:0];
+  wire [16:0] v2_n  = sd_v2 + {{2{sd_v1[14]}}, sd_v1} + {{3{y}}, 1'b1, 13'd0};   // + v1 - 2 fb
+
+  // When no voice sounds at the end of a frame, the next frame is silent:
+  // restart the loop on the frame's last clock (its x is always 0), so that
+  // every silence is the same clean 0110 pattern, 48 ones per frame.
+  wire        sd_restart = !rst_n || (fend && !(|act));
 
   always @(posedge clk) begin
-    if (!rst_n) begin
-      acc   <= 12'd0;
-      audio <= 1'b0;
+    if (sd_restart) begin
+      sd_v1 <= 15'd0;
+      sd_v2 <= {17{1'b1}};          // -1: the pin is low in reset
     end else begin
-      acc   <= sum[11:0];
-      audio <= sum[12];
+      sd_v1 <= v1_n;
+      sd_v2 <= v2_n;
     end
   end
+
+  assign audio = y;
 
 endmodule

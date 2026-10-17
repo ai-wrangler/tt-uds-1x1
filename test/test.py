@@ -4,6 +4,8 @@
 
 The testbench counts the 1s on the audio pin in each frame; the test steps
 model/uds_model.py one frame at a time and checks that the counts are equal.
+On the RTL it also checks that the DAC integrators (v1, v2) at the end of
+every frame equal the model's.
 Stimuli (SPI messages, pin triggers) start right after a frame boundary, so
 the frame in which the chip sees them is known exactly (see Bench.spi).
 """
@@ -44,6 +46,8 @@ class Bench:
         self.uio = 1 << CS
         self.ui = 0
         self.ready = 0          # first frame in which the next SPI message may start
+        self.v1_peak = 0        # largest |v1|, |v2| of the chip's DAC at frame ends (RTL only)
+        self.v2_peak = 0
 
     def at(self, frame, action):
         self.before.setdefault(frame, []).append(action)
@@ -74,6 +78,17 @@ class Bench:
                 self.errors += 1
                 if self.errors <= 10:
                     dut._log.error("frame %d: chip %d ones, model %d" % (self.checked, got, want))
+            if not GL and self.checked > 0:
+                # the DAC integrators at the end of the frame must equal the model's
+                v1 = signed(dut.frame_v1.value, M.SD_V1_BITS)
+                v2 = signed(dut.frame_v2.value, M.SD_V2_BITS)
+                self.v1_peak = max(self.v1_peak, abs(v1))
+                self.v2_peak = max(self.v2_peak, abs(v2))
+                if (v1, v2) != (self.model.v1, self.model.v2):
+                    self.errors += 1
+                    if self.errors <= 10:
+                        dut._log.error("frame %d: chip v1 %d v2 %d, model v1 %d v2 %d" % (
+                            self.checked, v1, v2, self.model.v1, self.model.v2))
             self.checked += 1
 
     async def next_frame(self):
@@ -168,6 +183,11 @@ class Bench:
         self.dut._log.info("%d frames match the model; slot choices %s" % (self.checked, self.model.choices))
 
 
+def signed(value, bits):
+    v = int(value)
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
 def random_params(rng):
     return (rng.randrange(256), rng.randrange(16), rng.randrange(16), rng.randrange(16), rng.randrange(16))
 
@@ -178,7 +198,9 @@ async def test_registers(dut):
     b = Bench(dut)
     await b.start()
     assert (await b.read(M.REG_ID))[0] == M.CHIP_ID
-    assert (await b.read(M.REG_VERSION))[0] == (M.VERSION << 4) | VOICES
+    version = (await b.read(M.REG_VERSION))[0]
+    assert version == (M.VERSION << 4) | VOICES, hex(version)
+    assert VOICES != 2 or version == 0x22, hex(version)     # second-order DAC, 2 voices
     assert (await b.read(M.REG_STATUS))[0] == 0
     await b.finish()
 
@@ -273,3 +295,74 @@ async def test_display_digit(dut):
         await b.hit(ch, M.PRESETS[ch])
         assert int(dut.uo_out.value) & 0x7F == DIGITS[ch]
     await b.finish()
+
+
+@cocotb.test()
+async def test_silence(dut):
+    """Silence is the clean mid-scale pattern: 48 ones in every frame after
+    reset, and again after a decay or a STOP (the loop restarts at (0, -1))."""
+    b = Bench(dut)
+    await b.start()
+    await b.frames(4)
+    await b.hit(M.CYMBAL, (255, 0, 4, 15, 15))     # short and loud
+    await b.hit(M.BASS, (20, 6, 15, 1, 15))        # long
+    await b.frames(300)
+    await b.stop()
+    await b.frames(6)
+    n = b.checked
+    await b.frames(20)
+    await b.finish()
+    assert (b.model.v1, b.model.v2) == (0, M.SD_V2_RESET)
+    assert b.checked > n
+
+
+def dac_params(rng):
+    """Random sounds, biased towards what stresses the DAC: full level, slow
+    decays, pitch corners, all balances, metal and drum noise."""
+    pitch = rng.choice((0, 1, 31, 32, 128, 224, 254, 255, rng.randrange(256)))
+    sweep = rng.choice((0, 0, 7, rng.randrange(8)))
+    decay = rng.choice((15, 13, 11, 9, rng.randrange(16)))
+    balance = rng.randrange(16)
+    level = rng.choice((15, 15, 15, 14, rng.randrange(16)))
+    return (pitch, sweep, decay, balance, level)
+
+
+@cocotb.test()
+async def test_dac(dut):
+    """Second-order DAC under long random traffic: both voices at full level
+    for long stretches, every balance, pitch corners, rapid retriggers, STOPs
+    and decays to silence. Every frame must match the model (count of 1s and,
+    on the RTL, both integrators); the integrators must stay inside the
+    proven bound and the v1 clamp must never act."""
+    total = 3_000 if GL else int(os.environ.get("DAC_FRAMES", "100000"))
+    rng = random.Random(2026)
+    b = Bench(dut)
+    await b.start()
+    await b.frames(2)
+    while b.checked < total:
+        r = rng.random()
+        if r < 0.55:                                    # rapid retriggers and steals
+            await b.hit(rng.randrange(8), dac_params(rng))
+        elif r < 0.75:                                  # both voices loud and sustained
+            await b.hit(rng.choice((0, 1, 2, 3, 4)), dac_params(rng))
+            await b.hit(rng.choice((5, 6)), dac_params(rng))
+            await b.frames(rng.choice((500, 2000, 6000)))
+        elif r < 0.80:
+            await b.stop()
+        elif r < 0.85:                                  # let everything decay to silence
+            await b.frames(rng.choice((3000, 12000)))
+        else:
+            await b.frames(rng.choice((0, 1, 2, 5, 20, 100, 400)))
+    await b.finish()
+    lo, hi = M.sd2_bounds()
+    m = b.model
+    chip = ("gate level: integrators not visible" if GL else
+            "chip at frame ends |v1| %d |v2| %d (equal to the model's)" % (b.v1_peak, b.v2_peak))
+    dut._log.info("DAC over %d frames: model peaks |v1| %d (%.2f x 4096), |v2| %d (%.2f x 4096), "
+                  "clamps %d; %s; proven |v2| bound %d"
+                  % (b.checked, m.v1_peak, m.v1_peak / 4096, m.v2_peak, m.v2_peak / 4096,
+                     m.v1_clamps, chip, max(-lo, hi)))
+    assert m.v1_clamps == 0, "the v1 clamp acted"
+    assert m.v1_peak < -M.SD_V1_MIN
+    assert -m.v2_peak >= lo and m.v2_peak <= hi
+    assert GL or (b.v1_peak <= m.v1_peak and b.v2_peak <= m.v2_peak)
