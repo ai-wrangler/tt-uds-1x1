@@ -340,8 +340,13 @@ module uds_core #(
   wire [14:0] v1_n  = ovf1 ? {s1[15], {14{~s1[15]}}} : s1[14:0];
   wire [16:0] v2_n  = sd_v2 + {{2{v1_n[14]}}, v1_n} + {{4{y}}, 1'b1, 12'd0};   // + v1_n - fb
 
+  // When no voice sounds at the end of a frame, the next frame is silent:
+  // restart the loop on the frame's last clock (its x is always 0), so that
+  // every silence is the same clean 0110 pattern, 48 ones per frame.
+  wire        sd_restart = !rst_n || (fend && !(|act));
+
   always @(posedge clk) begin
-    if (!rst_n) begin
+    if (sd_restart) begin
       sd_v1 <= 15'd0;
       sd_v2 <= {17{1'b1}};          // -1: the pin is low in reset
     end else begin

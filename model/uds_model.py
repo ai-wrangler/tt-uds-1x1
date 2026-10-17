@@ -76,6 +76,10 @@ Sigma-delta DAC (v0.2, VERSION register 0x22)
         v1 <- clamp(v1 + x - fb, -16384, 16383)  15 bits, saturating
         v2 <- v2 + v1 - fb                        17 bits, never overflows
     Reset: v1 = 0, v2 = -1 (the pin is low in reset and idles as 0110 0110 ...).
+    Silence: when no voice sounds at the end of a frame (the next frame's x
+    is all 0), the frame's last clock (whose x is always 0) loads the reset
+    values instead of updating, so every silence is the same clean pattern
+    with exactly 48 ones per frame, whatever the loop held after a decay.
     Boundedness, for ANY input with |x| <= 2048 (proof in sd2_bounds()):
     while v2 >= 0 the feedback lowers v1 by at least 2048 per clock, and v2
     only rises while v1 > 4096, so after v2 turns non-negative it rises for
@@ -392,16 +396,25 @@ class Engine:
             assert sum(xs) == total
         self.last_total = total
         self.last_x = xs
-        return self.dac2(xs) if self.dac_order == 2 else self.dac1(xs)
+        if self.dac_order == 1:
+            return self.dac1(xs)
+        return self.dac2(xs, quiet=not any(s.env for s in self.slots))
 
-    def dac2(self, xs):
+    def dac2(self, xs, quiet=False):
         """Second-order sigma-delta over one frame; returns the count of 1s.
         The pin in clock c + 1 is y computed from v2 after clock c's update,
-        which is how test/tb.v counts a frame."""
+        which is how test/tb.v counts a frame. quiet: no voice sounds in the
+        next frame, so the last clock restarts the loop at (0, -1)."""
         v1, v2 = self.v1, self.v2
         ones = 0
         bits = self.bits
-        for x in xs:
+        last = len(xs) - 1
+        for i, x in enumerate(xs):
+            if quiet and i == last:             # x is always 0 on a frame's last clock
+                v1, v2 = 0, SD_V2_RESET
+                if bits is not None:
+                    bits.append(0)
+                break
             fb = SD_FB if v2 >= 0 else -SD_FB
             v1 += x - fb
             if v1 > SD_V1_MAX:

@@ -297,6 +297,25 @@ async def test_display_digit(dut):
     await b.finish()
 
 
+@cocotb.test()
+async def test_silence(dut):
+    """Silence is the clean mid-scale pattern: 48 ones in every frame after
+    reset, and again after a decay or a STOP (the loop restarts at (0, -1))."""
+    b = Bench(dut)
+    await b.start()
+    await b.frames(4)
+    await b.hit(M.CYMBAL, (255, 0, 4, 15, 15))     # short and loud
+    await b.hit(M.BASS, (20, 6, 15, 1, 15))        # long
+    await b.frames(300)
+    await b.stop()
+    await b.frames(6)
+    n = b.checked
+    await b.frames(20)
+    await b.finish()
+    assert (b.model.v1, b.model.v2) == (0, M.SD_V2_RESET)
+    assert b.checked > n
+
+
 def dac_params(rng):
     """Random sounds, biased towards what stresses the DAC: full level, slow
     decays, pitch corners, all balances, metal and drum noise."""
