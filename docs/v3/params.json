@@ -1,0 +1,23 @@
+{
+  "contract": 0,
+  "status": "DRAFT 0 (strawman by the coordinator; V3-CHIP replaces it with CONTRACT 1)",
+  "clockHz": 12000000,
+  "frameClocks": 192,
+  "voices": 2,
+  "hit": {
+    "opcode": "0x18|ch",
+    "bytes": [["pitch"], ["decay", "level"], ["bend", "bendtime", "mix"], ["wave", "color", "clap", "snap"]]
+  },
+  "params": [
+    {"id": "pitch",    "label": "Pitch",      "bits": 8, "min": 0, "max": 255, "default": 64, "unit": "32 steps/oct", "group": "tone",  "help": "Base pitch, exponential, 32 steps per octave"},
+    {"id": "decay",    "label": "Decay",      "bits": 4, "min": 0, "max": 15,  "default": 8,  "unit": "",             "group": "amp",   "help": "Amplitude decay time, exponential"},
+    {"id": "level",    "label": "Level",      "bits": 4, "min": 0, "max": 15,  "default": 12, "unit": "",             "group": "amp",   "help": "Start level"},
+    {"id": "bend",     "label": "Bend",       "bits": 3, "min": 0, "max": 7,   "default": 0,  "unit": "",             "group": "tone",  "help": "Pitch-envelope depth, 0 = none, 7 = about +3 octaves at the start"},
+    {"id": "bendtime", "label": "Bend time",  "bits": 2, "min": 0, "max": 3,   "default": 1,  "unit": "",             "group": "tone",  "help": "Pitch-envelope time: about 5, 15, 40, 120 ms"},
+    {"id": "mix",      "label": "Tone/noise", "bits": 3, "min": 0, "max": 7,   "default": 0,  "unit": "",             "group": "noise", "help": "0 = tone only, 7 = noise only"},
+    {"id": "wave",     "label": "Wave",       "bits": 2, "min": 0, "max": 3,   "default": 0,  "unit": "",             "group": "tone",  "help": "0 triangle, 1 driven triangle, 2 square, 3 metal", "options": ["Triangle", "Driven", "Square", "Metal"]},
+    {"id": "color",    "label": "Color",      "bits": 2, "min": 0, "max": 3,   "default": 1,  "unit": "",             "group": "noise", "help": "Noise color: dark, white, bright, metallic", "options": ["Dark", "White", "Bright", "Metallic"]},
+    {"id": "clap",     "label": "Clap",       "bits": 1, "min": 0, "max": 1,   "default": 0,  "unit": "",             "group": "noise", "help": "Noise in 3 to 4 bursts about 10 ms apart, then the tail"},
+    {"id": "snap",     "label": "Snap",       "bits": 3, "min": 0, "max": 7,   "default": 0,  "unit": "",             "group": "amp",   "help": "Short click or noise transient at the start"}
+  ]
+}
